@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Pizarra Tareas</title>
+  <meta name="theme-color" content="#2f6f4f" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body x-data="app()" x-init="init()">
+
+  <!-- ============================================================ -->
+  <!-- TOAST -->
+  <!-- ============================================================ -->
+  <div
+    class="toast"
+    :class="'toast--' + toast.tipo"
+    x-show="toast.visible"
+    x-transition
+    x-text="toast.mensaje"
+    style="display:none"
+  ></div>
+
+  <!-- ============================================================ -->
+  <!-- PANTALLA DE LOGIN -->
+  <!-- ============================================================ -->
+  <main class="login-screen" x-show="!usuario" x-cloak>
+    <div class="login-card">
+      <h1>Pizarra de Tareas</h1>
+      <p class="login-sub">Ingresá tu PIN para entrar</p>
+      <form @submit.prevent="login()">
+        <input
+          type="password"
+          inputmode="numeric"
+          pattern="[0-9]*"
+          maxlength="6"
+          placeholder="PIN"
+          x-model="pinInput"
+          autofocus
+          class="pin-input"
+        />
+        <p class="login-error" x-show="loginError" x-text="loginError"></p>
+        <button type="submit" class="btn btn-primary btn-block" :disabled="loginCargando">
+          <span x-show="!loginCargando">Entrar</span>
+          <span x-show="loginCargando">Ingresando…</span>
+        </button>
+      </form>
+    </div>
+  </main>
+
+  <!-- ============================================================ -->
+  <!-- APP PRINCIPAL -->
+  <!-- ============================================================ -->
+  <div class="app-shell" x-show="usuario" x-cloak>
+
+    <header class="app-header">
+      <div class="app-header__titulo">
+        <strong>Pizarra de Tareas</strong>
+        <span class="badge" x-show="usuario" x-text="usuario ? usuario.nombre : ''"></span>
+        <span class="badge badge--rol" x-show="usuario" x-text="esJefe() ? 'Jefe' : 'Colaborador'"></span>
+      </div>
+      <button class="btn btn-ghost" @click="logout()">Cerrar sesión</button>
+    </header>
+
+    <!-- Tabs solo para Jefe -->
+    <nav class="tabs" x-show="esJefe()">
+      <button :class="{active: tabActiva === 'tablero'}" @click="cambiarTab('tablero')">Tablero</button>
+      <button :class="{active: tabActiva === 'usuarios'}" @click="cambiarTab('usuarios')">Usuarios</button>
+      <button :class="{active: tabActiva === 'log'}" @click="cambiarTab('log')">Log</button>
+      <button :class="{active: tabActiva === 'archivadas'}" @click="cambiarTab('archivadas')">Archivadas</button>
+    </nav>
+
+    <div class="loading-bar" x-show="cargando" x-cloak></div>
+
+    <!-- ======================================================== -->
+    <!-- TABLERO (kanban) -->
+    <!-- ======================================================== -->
+    <section class="vista" x-show="tabActiva === 'tablero' || !esJefe()">
+
+      <!-- Filtros: solo Jefe -->
+      <div class="filtros" x-show="esJefe()">
+        <select x-model="filtroResponsable">
+          <option value="">Todos los responsables</option>
+          <template x-for="u in usuarios" :key="u.id">
+            <option :value="u.id" x-text="u.nombre"></option>
+          </template>
+        </select>
+        <select x-model="filtroPrioridad">
+          <option value="">Toda prioridad</option>
+          <template x-for="p in PRIORIDADES" :key="p.id">
+            <option :value="p.id" x-text="p.nombre"></option>
+          </template>
+        </select>
+        <select x-model="filtroEtiqueta">
+          <option value="">Toda etiqueta</option>
+          <template x-for="e in ETIQUETAS" :key="e">
+            <option :value="e" x-text="e"></option>
+          </template>
+        </select>
+      </div>
+
+      <div class="kanban">
+        <template x-for="columna in ESTADOS" :key="columna.id">
+          <div class="kanban-col" :class="'kanban-col--' + columna.id">
+            <button class="kanban-col__header" @click="toggleColumna(columna.id)">
+              <span x-text="columna.nombre"></span>
+              <span class="kanban-col__count" x-text="tareasPorEstado(columna.id).length"></span>
+            </button>
+            <div class="kanban-col-body" :class="{collapsed: !columnasAbiertas[columna.id]}">
+              <template x-for="tarea in tareasPorEstado(columna.id)" :key="tarea.id">
+                <article class="tarjeta" :class="'tarjeta--' + tarea.prioridad" @click="abrirDetalle(tarea)">
+                  <h3 x-text="tarea.titulo"></h3>
+                  <p class="tarjeta__meta" x-show="esJefe()" x-text="nombreUsuario(tarea.responsable_id)"></p>
+                  <p class="tarjeta__meta" x-show="tarea.etiqueta" x-text="tarea.etiqueta"></p>
+                  <p class="tarjeta__fecha" x-text="formatFechaRelativa(tarea.fecha_limite)"></p>
+                </article>
+              </template>
+              <p class="kanban-col__vacio" x-show="tareasPorEstado(columna.id).length === 0">Sin tareas</p>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <button class="fab" @click="abrirModalNuevaTarea()" title="Nueva tarea">+</button>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- USUARIOS (solo Jefe) -->
+    <!-- ======================================================== -->
+    <section class="vista" x-show="esJefe() && tabActiva === 'usuarios'" x-cloak>
+      <div class="vista__toolbar">
+        <button class="btn btn-primary" @click="abrirNuevoUsuario()">+ Nuevo usuario</button>
+      </div>
+      <div class="tabla-wrap">
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Rol</th>
+              <th>PIN</th>
+              <th>Estado</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="u in usuarios" :key="u.id">
+              <tr :class="{ 'fila-inactiva': !u.activo }">
+                <td x-text="u.nombre"></td>
+                <td x-text="u.rol === 'jefe' ? 'Jefe' : 'Colaborador'"></td>
+                <td x-text="u.pin"></td>
+                <td x-text="u.activo ? 'Activo' : 'Inactivo'"></td>
+                <td class="tabla__acciones">
+                  <button class="btn btn-sm" @click="editarUsuario(u)">Editar</button>
+                  <button class="btn btn-sm" @click="toggleActivoUsuario(u)" x-text="u.activo ? 'Desactivar' : 'Activar'"></button>
+                  <button class="btn btn-sm btn-danger" @click="eliminarUsuario(u)">Eliminar</button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- LOG (solo Jefe) -->
+    <!-- ======================================================== -->
+    <section class="vista" x-show="esJefe() && tabActiva === 'log'" x-cloak>
+      <div class="filtros">
+        <select x-model="filtroLogUsuario">
+          <option value="">Todos los usuarios</option>
+          <template x-for="u in usuarios" :key="u.id">
+            <option :value="u.id" x-text="u.nombre"></option>
+          </template>
+        </select>
+        <select x-model="filtroLogAccion">
+          <option value="">Toda acción</option>
+          <option value="crear_tarea">Crear tarea</option>
+          <option value="cambio_estado">Cambio de estado</option>
+        </select>
+      </div>
+      <div class="tabla-wrap">
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Usuario</th>
+              <th>Acción</th>
+              <th>Detalle</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="l in logFiltrado()" :key="l.id">
+              <tr>
+                <td x-text="formatFechaHora(l.timestamp)"></td>
+                <td x-text="l.usuarios ? l.usuarios.nombre : nombreUsuario(l.usuario_id)"></td>
+                <td x-text="l.accion === 'crear_tarea' ? 'Crear tarea' : 'Cambio de estado'"></td>
+                <td x-text="l.detalle"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ======================================================== -->
+    <!-- ARCHIVADAS (solo Jefe) -->
+    <!-- ======================================================== -->
+    <section class="vista" x-show="esJefe() && tabActiva === 'archivadas'" x-cloak>
+      <div class="tabla-wrap">
+        <table class="tabla">
+          <thead>
+            <tr>
+              <th>Título</th>
+              <th>Responsable</th>
+              <th>Estado</th>
+              <th>Hecha el</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="t in archivadas" :key="t.id">
+              <tr>
+                <td x-text="t.titulo"></td>
+                <td x-text="nombreUsuario(t.responsable_id)"></td>
+                <td x-text="nombreEstado(t.estado)"></td>
+                <td x-text="t.fecha_hecha ? formatFechaHora(t.fecha_hecha) : '—'"></td>
+                <td>
+                  <button class="btn btn-sm" @click="desarchivar(t)">Desarchivar</button>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="archivadas.length === 0">
+              <td colspan="5">No hay tareas archivadas.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: NUEVA TAREA -->
+  <!-- ============================================================ -->
+  <div class="modal-overlay" x-show="modalNuevaTarea" x-cloak @click.self="cerrarModalNuevaTarea()">
+    <div class="modal">
+      <h2>Nueva tarea</h2>
+      <form @submit.prevent="guardarNuevaTarea()">
+        <label>Título *</label>
+        <input type="text" x-model="nuevaTarea.titulo" maxlength="120" required />
+
+        <label>Descripción</label>
+        <textarea x-model="nuevaTarea.descripcion" rows="3"></textarea>
+
+        <label x-show="esJefe()">Responsable *</label>
+        <select x-show="esJefe()" x-model="nuevaTarea.responsable_id">
+          <option value="">Elegí un responsable</option>
+          <template x-for="u in usuarios.filter(u => u.activo)" :key="u.id">
+            <option :value="u.id" x-text="u.nombre"></option>
+          </template>
+        </select>
+
+        <div class="form-row">
+          <div>
+            <label>Prioridad</label>
+            <select x-model="nuevaTarea.prioridad">
+              <template x-for="p in PRIORIDADES" :key="p.id">
+                <option :value="p.id" x-text="p.nombre"></option>
+              </template>
+            </select>
+          </div>
+          <div>
+            <label>Fecha límite</label>
+            <input type="date" x-model="nuevaTarea.fecha_limite" />
+          </div>
+        </div>
+
+        <label>Etiqueta</label>
+        <select x-model="nuevaTarea.etiqueta">
+          <template x-for="e in ETIQUETAS" :key="e">
+            <option :value="e" x-text="e"></option>
+          </template>
+        </select>
+
+        <div class="modal-acciones">
+          <button type="button" class="btn btn-ghost" @click="cerrarModalNuevaTarea()">Cancelar</button>
+          <button type="submit" class="btn btn-primary" :disabled="guardandoNuevaTarea">
+            <span x-show="!guardandoNuevaTarea">Crear tarea</span>
+            <span x-show="guardandoNuevaTarea">Guardando…</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: DETALLE / EDICIÓN DE TAREA -->
+  <!-- ============================================================ -->
+  <div class="modal-overlay" x-show="modalDetalleAbierto" x-cloak @click.self="cerrarModalDetalle()">
+    <div class="modal" x-show="tareaSeleccionada">
+      <template x-if="tareaSeleccionada">
+        <div>
+          <h2>Detalle de tarea</h2>
+
+          <label>Título</label>
+          <input type="text" x-model="tareaSeleccionada.titulo" :disabled="!puedeEditarTarea(tareaSeleccionada)" maxlength="120" />
+
+          <label>Descripción</label>
+          <textarea x-model="tareaSeleccionada.descripcion" rows="3" :disabled="!puedeEditarTarea(tareaSeleccionada)"></textarea>
+
+          <label x-show="esJefe()">Responsable</label>
+          <select x-show="esJefe()" x-model="tareaSeleccionada.responsable_id">
+            <template x-for="u in usuarios" :key="u.id">
+              <option :value="u.id" x-text="u.nombre"></option>
+            </template>
+          </select>
+
+          <div class="form-row">
+            <div>
+              <label>Prioridad</label>
+              <select x-model="tareaSeleccionada.prioridad" :disabled="!puedeEditarTarea(tareaSeleccionada)">
+                <template x-for="p in PRIORIDADES" :key="p.id">
+                  <option :value="p.id" x-text="p.nombre"></option>
+                </template>
+              </select>
+            </div>
+            <div>
+              <label>Fecha límite</label>
+              <input type="date" x-model="tareaSeleccionada.fecha_limite" :disabled="!puedeEditarTarea(tareaSeleccionada)" />
+            </div>
+          </div>
+
+          <label>Etiqueta</label>
+          <select x-model="tareaSeleccionada.etiqueta" :disabled="!puedeEditarTarea(tareaSeleccionada)">
+            <template x-for="e in ETIQUETAS" :key="e">
+              <option :value="e" x-text="e"></option>
+            </template>
+          </select>
+
+          <p class="tarjeta__fecha" x-text="formatFechaRelativa(tareaSeleccionada.fecha_limite)"></p>
+
+          <div class="modal-acciones" x-show="puedeEditarTarea(tareaSeleccionada)">
+            <button type="button" class="btn btn-primary btn-block" @click="guardarEdicionTarea()" :disabled="guardandoDetalle">
+              Guardar cambios
+            </button>
+          </div>
+
+          <!-- Cambio de estado -->
+          <h3>Mover a</h3>
+          <p class="aviso" x-show="tareaSeleccionada.estado === 'que_paso' && !puedeCambiarEstado()">
+            Agregá una nota antes de poder cambiar de estado.
+          </p>
+          <div class="estado-botones">
+            <template x-for="e in ESTADOS" :key="e.id">
+              <button
+                class="btn btn-sm"
+                :class="{ 'btn-activo': tareaSeleccionada.estado === e.id }"
+                :disabled="tareaSeleccionada.estado === e.id || !puedeEditarTarea(tareaSeleccionada) || !puedeCambiarEstado() || guardandoDetalle"
+                @click="cambiarEstado(e.id)"
+                x-text="e.nombre"
+              ></button>
+            </template>
+          </div>
+
+          <!-- Notas -->
+          <h3>Notas</h3>
+          <div class="notas-lista">
+            <template x-for="n in notasTarea" :key="n.id">
+              <div class="nota">
+                <strong x-text="n.usuarios ? n.usuarios.nombre : nombreUsuario(n.usuario_id)"></strong>
+                <span class="nota__fecha" x-text="formatFechaHora(n.created_at)"></span>
+                <p x-text="n.texto"></p>
+              </div>
+            </template>
+            <p class="kanban-col__vacio" x-show="notasTarea.length === 0">Sin notas todavía.</p>
+          </div>
+          <form @submit.prevent="agregarNota()" class="form-nota">
+            <input type="text" x-model="nuevaNotaTexto" placeholder="Agregar una nota…" maxlength="500" />
+            <button type="submit" class="btn btn-primary" :disabled="guardandoNota || !nuevaNotaTexto.trim()">Enviar</button>
+          </form>
+
+          <!-- Acciones de Jefe -->
+          <div class="modal-acciones modal-acciones--jefe" x-show="esJefe()">
+            <button type="button" class="btn btn-ghost" @click="archivarTareaManual()">Archivar</button>
+            <button type="button" class="btn btn-danger" @click="eliminarTarea()">Eliminar</button>
+          </div>
+
+          <div class="modal-acciones">
+            <button type="button" class="btn btn-ghost btn-block" @click="cerrarModalDetalle()">Cerrar</button>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: USUARIO (crear / editar) -->
+  <!-- ============================================================ -->
+  <div class="modal-overlay" x-show="modalUsuario" x-cloak @click.self="cerrarModalUsuario()">
+    <div class="modal">
+      <h2 x-text="usuarioForm.id ? 'Editar usuario' : 'Nuevo usuario'"></h2>
+      <form @submit.prevent="guardarUsuario()">
+        <label>Nombre *</label>
+        <input type="text" x-model="usuarioForm.nombre" maxlength="60" required />
+
+        <label>Rol</label>
+        <select x-model="usuarioForm.rol">
+          <option value="colaborador">Colaborador</option>
+          <option value="jefe">Jefe</option>
+        </select>
+
+        <label>PIN (4-6 dígitos) *</label>
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" x-model="usuarioForm.pin" required />
+
+        <label class="checkbox-label" x-show="usuarioForm.id">
+          <input type="checkbox" x-model="usuarioForm.activo" />
+          Activo
+        </label>
+
+        <div class="modal-acciones">
+          <button type="button" class="btn btn-ghost" @click="cerrarModalUsuario()">Cancelar</button>
+          <button type="submit" class="btn btn-primary" :disabled="guardandoUsuario">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- LIBRERÍAS (CDN) Y SCRIPTS DE LA APP -->
+  <!-- ============================================================ -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
